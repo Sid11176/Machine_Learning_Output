@@ -27,25 +27,28 @@ print(Plant1_day.isnull().sum())
 
 # --- Drop Rows where sensors had no reading (NaN) ------------------------------
 missing_before = len(Plant1_day)
-Plant1_day = Plant1_day.dropna(subset=['IRRADIATION', 'AMBIENT_TEMPERATURE', 'MODULE_TEMPERATURE'])
+Plant1_day = Plant1_day.dropna(subset=['IRRADIATION', 
+                                       'AMBIENT_TEMPERATURE', 
+                                       'MODULE_TEMPERATURE'])
 print(f'\nRows Dropped: {missing_before - len(Plant1_day)}')
 print(f'Rows Remaining: {len(Plant1_day)}')
 
 # --- Compute efficiency ratio ----------------------------------------------------
+Plant1_day['AC_POWER'] = Plant1_day['AC_POWER']
 Plant1_day['EFFICIENCY_RATIO'] = Plant1_day['AC_POWER'] / Plant1_day['DC_POWER']
 
 # --- Set time index --------------------------------------------------------------
-Plant1_day = Plant1_day.set_index('DATE_TIME').sort_index()
+Plant1_day = Plant1_day.sort_values('DATE_TIME')
 
 # --- Plot 1: Efficiency per inverter ---------------------------------------------
-plt.figure(figsize=(14, 6))
+plt.figure(figsize=(12, 6))
 sns.boxplot(data=Plant1_day, x='SOURCE_KEY', y='EFFICIENCY_RATIO')
 plt.xticks(rotation=90)
 plt.title('Efficiency Ratio per Inverter — Plant 1')
 plt.xlabel('Source Key (Inverter)')
 plt.ylabel('Efficiency Ratio (AC / DC)')
 plt.tight_layout()
-plt.show()
+#plt.show()
 
 # --- Plot 2: DC power vs irradiation ----------------------------------------------
 plt.figure(figsize=(10, 6))
@@ -54,17 +57,17 @@ plt.title('DC Power vs Irradiation — Plant 1')
 plt.xlabel('Irradiation (W/m²)')
 plt.ylabel('DC Power (kW)')
 plt.tight_layout()
-plt.show()
+#plt.show()
 
 # --- Plot 3: Fleet Average Efficiency over time -------------------------------------
-daily_eff = Plant1_day.groupby(Plant1_day.index.date)['EFFICIENCY_RATIO'].mean()
+daily_eff = Plant1_day.groupby(Plant1_day['DATE_TIME'].dt.date)['EFFICIENCY_RATIO'].mean()
 plt.figure(figsize=(12,6))
 plt.plot(daily_eff.index, daily_eff.values, color='blue')
-plt.title('Fleet Average Efficiency Over Time')
+plt.title('Fleet Average Efficiency Over Time — Plant 1')
 plt.xlabel('Date')
 plt.ylabel('Mean Efficiency Ratio')
 plt.tight_layout()
-plt.show()
+#plt.show()
 
 # --- Inverter Efficiency Percentile Ranking (Setting for Plot 4) --------------------
 inverter_stats = (Plant1_day.groupby('SOURCE_KEY')['EFFICIENCY_RATIO'].
@@ -72,3 +75,42 @@ inverter_stats = (Plant1_day.groupby('SOURCE_KEY')['EFFICIENCY_RATIO'].
                   rename(columns={'mean': 'MEAN_EFF', 'median': 'MEDIAN_EFF', 'std': "STD_EFF"}))
 
 inverter_stats['PERCENTILE_RANK'] = (inverter_stats['MEAN_EFF'].rank(pct=True) * 100).round(1)
+
+inverter_stats = inverter_stats.sort_values('MEAN_EFF')
+print('\n === Inverter Effeciency Ranking (Worst to Best)')
+print(inverter_stats.to_string())
+
+underperformers = inverter_stats[inverter_stats['PERCENTILE_RANK'] <= 25]
+print('\n === Underperforming Inverters (Bottom 25th Percentile)')
+print(underperformers.to_string())
+
+# --- Plot 4: Inverter ranking bar chart ----------------------------------------------
+plt.figure(figsize=(10,6))
+colors = ["#E41919" if p <= 25 else 'blue' for p in inverter_stats['PERCENTILE_RANK']]
+plt.bar(inverter_stats.index, inverter_stats['MEAN_EFF'], color=colors)
+plt.axhline(y=inverter_stats['MEAN_EFF'].quantile(0.25), 
+            color='red', 
+            linestyle='--',
+            linewidth=0.8, 
+            label='25th Percentile')
+plt.xticks(rotation=90)
+plt.title('Mean Efficiency Ratio per Inverter — Plant 1 (red = underperformer)')
+plt.xlabel('Source Key (Inverter)')
+plt.ylabel('Mean Efficiency Ratio')
+plt.tight_layout()
+plt.legend()
+#plt.show()
+
+
+# --- Plot 5: Module Temperature vs Efficiency ---------------------------------------
+plt.figure(figsize=(12,6))
+sns.scatterplot(data=Plant1_day,
+                x='MODULE_TEMPERATURE', 
+                y='EFFICIENCY_RATIO',
+                alpha=0.3)
+plt.title('Module Temperature vs Efficiency Ratio — Plant 1')
+plt.xlabel('Module Temperature')
+plt.ylabel('Efficiency Ratio')
+plt.tight_layout()
+plt.show()
+
