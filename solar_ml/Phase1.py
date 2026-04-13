@@ -17,15 +17,19 @@ Plant1_merge = pd.merge(Gen1, Sens1, on=['DATE_TIME', 'PLANT_ID'], how='left')
 Plant1_merge = Plant1_merge.drop(columns=['SOURCE_KEY_y'])
 Plant1_merge = Plant1_merge.rename(columns={'SOURCE_KEY_x': 'SOURCE_KEY'})
 
-
-# --- Handle Missing Data --------------------------------------------------------
-
-
-
-
 # --- Filter to daylight hours only ----------------------------------------------
 Plant1_day = Plant1_merge[Plant1_merge['DC_POWER'] > 0].copy()
 del Plant1_merge
+
+# --- Handle Missing Data --------------------------------------------------------
+print('--- Missing Values on Daylight---')
+print(Plant1_day.isnull().sum())
+
+# --- Drop Rows where sensors had no reading (NaN) ------------------------------
+missing_before = len(Plant1_day)
+Plant1_day = Plant1_day.dropna(subset=['IRRADIATION', 'AMBIENT_TEMPERATURE', 'MODULE_TEMPERATURE'])
+print(f'\nRows Dropped: {missing_before - len(Plant1_day)}')
+print(f'Rows Remaining: {len(Plant1_day)}')
 
 # --- Compute efficiency ratio ----------------------------------------------------
 Plant1_day['EFFICIENCY_RATIO'] = Plant1_day['AC_POWER'] / Plant1_day['DC_POWER']
@@ -52,3 +56,19 @@ plt.ylabel('DC Power (kW)')
 plt.tight_layout()
 plt.show()
 
+# --- Plot 3: Fleet Average Efficiency over time -------------------------------------
+daily_eff = Plant1_day.groupby(Plant1_day.index.date)['EFFICIENCY_RATIO'].mean()
+plt.figure(figsize=(12,6))
+plt.plot(daily_eff.index, daily_eff.values, color='blue')
+plt.title('Fleet Average Efficiency Over Time')
+plt.xlabel('Date')
+plt.ylabel('Mean Efficiency Ratio')
+plt.tight_layout()
+plt.show()
+
+# --- Inverter Efficiency Percentile Ranking (Setting for Plot 4) --------------------
+inverter_stats = (Plant1_day.groupby('SOURCE_KEY')['EFFICIENCY_RATIO'].
+                  agg(['mean', 'median', 'std']).
+                  rename(columns={'mean': 'MEAN_EFF', 'median': 'MEDIAN_EFF', 'std': "STD_EFF"}))
+
+inverter_stats['PERCENTILE_RANK'] = (inverter_stats['MEAN_EFF'].rank(pct=True) * 100).round(1)
