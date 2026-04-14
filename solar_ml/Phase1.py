@@ -18,7 +18,10 @@ Plant1_merge = Plant1_merge.drop(columns=['SOURCE_KEY_y'])
 Plant1_merge = Plant1_merge.rename(columns={'SOURCE_KEY_x': 'SOURCE_KEY'})
 
 # --- Filter to daylight hours only ----------------------------------------------
-Plant1_day = Plant1_merge[Plant1_merge['DC_POWER'] > 0].copy()
+Plant1_day = Plant1_merge[
+    (Plant1_merge['DC_POWER'] > 0) &
+    (Plant1_merge['IRRADIATION'] > 0)
+].copy()
 del Plant1_merge
 
 # --- Handle Missing Data --------------------------------------------------------
