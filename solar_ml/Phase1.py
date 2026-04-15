@@ -100,6 +100,7 @@ plt.xticks(rotation=90)
 plt.title('Mean Efficiency Ratio per Inverter — Plant 1 (red = underperformer)')
 plt.xlabel('Source Key (Inverter)')
 plt.ylabel('Mean Efficiency Ratio')
+plt.ylim(0.975, 0.981)  #   line to make differences visible
 plt.tight_layout()
 plt.legend()
 #plt.show()
@@ -115,5 +116,129 @@ plt.title('Module Temperature vs Efficiency Ratio — Plant 1')
 plt.xlabel('Module Temperature')
 plt.ylabel('Efficiency Ratio')
 plt.tight_layout()
-plt.show()
+#plt.show()
 
+
+
+
+
+
+
+#===============================================================================================
+#===============================================================================================
+#===============================================================================================
+
+
+
+
+
+
+
+# --- Feature 1: AC/DC Efficiency Ratio ----------------------------------------------------
+Plant1_day['EFFICIENCY_RATIO'] = Plant1_day['AC_POWER'] / Plant1_day['DC_POWER']
+
+plt.figure(figsize=(12,6))
+sns.boxplot(data=Plant1_day, x='SOURCE_KEY', y='EFFICIENCY_RATIO')
+plt.xticks(rotation=90)
+plt.title('AC/DC Efficiency Ratio per Inverter — Plant 1')
+plt.xlabel('Inverter')
+plt.ylabel('Efficiency Ratio (AC/DC)')
+plt.tight_layout()
+#plt.show()
+
+# --- Feature 2: Irradiance-Normalized DC Power ---------------------------------------------------
+Plant1_day['IRR_NORM_DC'] = Plant1_day['DC_POWER']/Plant1_day['IRRADIATION']
+
+plt.figure(figsize=(12,6))
+sns.boxplot(data=Plant1_day, x='SOURCE_KEY', y='IRR_NORM_DC')
+plt.xticks(rotation=90)
+plt.title('Irradiance-Normalized DC Power per Inverter')
+plt.xlabel('Inverter')
+plt.ylabel('DC Power / Irradiation (kW / W/m²)')
+plt.tight_layout()
+#plt.show()
+
+# --- Normalized Power Loss in Temperature Derating --------------------------------------
+TEMP_COEFFICIENT = 0.005 #This comes from the fact that power drops ~0.4-0.5% per °C above 25°C (typical for crystalline silicon)
+
+HIGH_IRR_THRESHOLD = Plant1_day['IRRADIATION'].quantile(0.90)
+
+P_RATED = (Plant1_day[Plant1_day['IRRADIATION'] >= HIGH_IRR_THRESHOLD
+                     ].groupby('SOURCE_KEY')['DC_POWER'].quantile(0.95))
+
+
+Plant1_day['P_RATED'] = Plant1_day['SOURCE_KEY'].map(P_RATED)
+
+Plant1_day['EXPECTED_DC'] = Plant1_day['P_RATED'] * (
+  1 - TEMP_COEFFICIENT * (Plant1_day['MODULE_TEMPERATURE'] - 25)
+  )
+
+Plant1_day['TEMP_DERATING'] = ((Plant1_day['EXPECTED_DC'] - 
+                               Plant1_day['DC_POWER']) / Plant1_day['P_RATED']) * 100
+
+# --- Condition derating on irradiation bins to remove weather effect -------------------
+Plant1_day['IRR_BIN'] = pd.cut(Plant1_day['IRRADIATION'], bins=10)
+Plant1_day['TEMP_DERATING_CONDITIONED'] = Plant1_day.groupby('IRR_BIN')['TEMP_DERATING'].transform(
+  lambda x: (x - x.mean()) / x.std())
+
+plt.figure(figsize=(12,6))
+sns.boxplot(data=Plant1_day, x='SOURCE_KEY', y='TEMP_DERATING_CONDITIONED')
+plt.xticks(rotation=90)
+plt.title('Temperature Derating per Inverter (Irradiation-Conditioned)')
+plt.xlabel('Inverter')
+plt.ylabel('Conditioned Temperature Derating (Z-Score)')
+plt.axhline(y=0, color='red', linestyle='--', linewidth=0.8, label='Fleet Mean')
+plt.legend()
+plt.tight_layout()
+#plt.show()
+
+
+# --- Rolling 1 Hour Average Deviation per Inverter ------------------------------------
+Plant1_day = Plant1_day.sort_values(['SOURCE_KEY', 'DATE_TIME'])
+
+Plant1_day['ROLLING_DC_MEAN'] = (
+  Plant1_day
+  .set_index('DATE_TIME')
+  .groupby('SOURCE_KEY')['DC_POWER']
+  .transform(lambda x: x.rolling('1h').mean())
+  .values
+)
+Plant1_day['ROLLING_DEVIATION'] = Plant1_day['DC_POWER'] - Plant1_day['ROLLING_DC_MEAN']
+Plant1_day = Plant1_day.reset_index()
+
+# --- Full Fleet Overview -----------------
+
+plt.figure(figsize=(12, 6))
+for inverter in Plant1_day['SOURCE_KEY'].unique():
+    subset = Plant1_day[Plant1_day['SOURCE_KEY'] == inverter]
+    plt.plot(subset['DATE_TIME'], subset['ROLLING_DEVIATION'],
+             alpha=0.2, linewidth=0.3, color='steelblue')
+
+plt.axhline(y=0, color='red', linestyle='--', linewidth=0.8, label='Zero Deviation')
+plt.axhline(y=-2000, color='orange', linestyle='--', linewidth=0.8, label='Warning Threshold (-2000 kW)')
+plt.axhline(y=-4000, color='darkred', linestyle='--', linewidth=0.8, label='Critical Threshold (-4000 kW)')
+plt.title('Rolling 1-Hour DC Power Deviation — Full Fleet')
+plt.xlabel('Date')
+plt.ylabel('Deviation from Rolling Mean (kW)')
+plt.legend()
+plt.tight_layout()
+
+# --- Flagged Inverters ----------------------
+flagged = ['sjndEbLyjtCKgGv', 'iCRJl6heRkivqQ3', 
+           'McdE0feGgRqW7Ca', 'wCURE6d3bPkepu2', 'bvBOhCH3iADSZry']
+
+colors = ['red', 'orange', 'purple', 'green', 'blue']
+
+plt.figure(figsize=(12, 6))
+for inverter, color in zip(flagged, colors):
+    subset = Plant1_day[Plant1_day['SOURCE_KEY'] == inverter]
+    plt.plot(subset['DATE_TIME'], subset['ROLLING_DEVIATION'],
+             alpha=0.7, linewidth=0.5, color=color, label=inverter)
+
+plt.axhline(y=0, color='black', linestyle='--', linewidth=0.8, label='Zero Deviation')
+plt.title('Rolling Deviation — Flagged Inverters Only')
+plt.xlabel('Date')
+plt.ylabel('Deviation from Rolling Mean (kW)')
+plt.legend(loc='upper right', fontsize=7)
+plt.tight_layout()
+plt.show()
