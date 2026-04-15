@@ -271,3 +271,14 @@ flag_rate = (total_flagged / total_readings) * 100
 print(f'Total Reading:    {total_readings}')
 print(f'Total Flagged:    {total_flagged}')
 print(f'Flag Rate:        {flag_rate:.2f}%')
+
+#Flags per Inverter
+inverter_flags = (Plant1_day.groupby('SOURCE_KEY')['ANOMALY_FLAG']
+                  .agg(['sum', 'count'])
+                  .rename(columns={'sum': 'FLAGS', 'count': 'TOTAL'})
+                  )
+
+inverter_flags['FLAG_RATE'] = (inverter_flags['COUNT'] / inverter_flags['TOTAL'] * 100).round(2)
+
+inverter_flags = inverter_flags.sort_values('FLAG_RATE', ascending=False)
+
