@@ -241,4 +241,33 @@ plt.xlabel('Date')
 plt.ylabel('Deviation from Rolling Mean (kW)')
 plt.legend(loc='upper right', fontsize=7)
 plt.tight_layout()
-plt.show()
+#plt.show()
+
+
+# --- Baseline: Statistical Threshold Method -----------------------------------------------------
+
+#Extracting hour
+Plant1_day['HOUR'] = Plant1_day['DATE_TIME'].dt.hour
+
+#Computing Mean and STD per inverter per hour bucket
+hourly_stats = (Plant1_day.groupby(['SOURCE_KEY', 'HOUR'])['EFFICIENCY_RATIO']
+                .agg(['mean', 'std'])
+                .rename(columns={'mean': 'HOUR_MEAN', 'std': 'HOUR_STD'})
+                .reset_index()
+                )
+
+#Merging back to the main DataFrame
+Plant1_day = Plant1_day.merge(hourly_stats, on=['SOURCE_KEY', 'HOUR'], how='left')
+
+Plant1_day['THRESHOLD'] = Plant1_day['HOUR_MEAN'] - 2 * Plant1_day['HOUR_STD']
+Plant1_day['ANOMALY_FLAG'] = (Plant1_day['EFFICIENCY_RATIO'] < Plant1_day['THRESHOLD']).astype(int)
+
+
+#Documenting False Positive Rates
+total_readings = len(Plant1_day)
+total_flagged = Plant1_day['ANOMALY_FLAG'].sum()
+flag_rate = (total_flagged / total_readings) * 100
+
+print(f'Total Reading:    {total_readings}')
+print(f'Total Flagged:    {total_flagged}')
+print(f'Flag Rate:        {flag_rate:.2f}%')
