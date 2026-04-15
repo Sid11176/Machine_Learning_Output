@@ -278,7 +278,21 @@ inverter_flags = (Plant1_day.groupby('SOURCE_KEY')['ANOMALY_FLAG']
                   .rename(columns={'sum': 'FLAGS', 'count': 'TOTAL'})
                   )
 
-inverter_flags['FLAG_RATE'] = (inverter_flags['COUNT'] / inverter_flags['TOTAL'] * 100).round(2)
+inverter_flags['FLAG_RATE'] = (inverter_flags['FLAGS'] / inverter_flags['TOTAL'] * 100).round(2)
 
 inverter_flags = inverter_flags.sort_values('FLAG_RATE', ascending=False)
 
+print('\n=== Anomaly Flags per Inverter ===')
+print(inverter_flags.to_string())
+
+plt.figure(figsize=(12,6))
+sns.barplot(data=inverter_flags.reset_index(), x='SOURCE_KEY', y='FLAG_RATE')
+plt.xticks(rotation=90)
+plt.axhline(y=flag_rate, color='red', linestyle='--', 
+            linewidth=0.8, label=f'Fleet Average ({flag_rate:.2f}%)')
+plt.title('Anomaly Flag Rate per Inverter — Baseline Statistical Method')
+plt.xlabel('Inverter')
+plt.ylabel('Flag Rate (%)')
+plt.legend()
+plt.tight_layout()
+plt.show()
