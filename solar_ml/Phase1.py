@@ -295,4 +295,32 @@ plt.xlabel('Inverter')
 plt.ylabel('Flag Rate (%)')
 plt.legend()
 plt.tight_layout()
-plt.show()
+#plt.show()
+
+
+
+
+
+#===============================================================================================
+#===============================================================================================
+#===============================================================================================
+
+#               MODEL 1
+from sklearn.ensemble import IsolationForest
+from sklearn.preprocessing import StandardScaler
+import numpy as np
+
+
+#Selecting Features
+features = ['DC_POWER', 'EFFICIENCY_RATIO', 'TEMP_DERATING', 'IRRADIATION']
+
+#Dropping rows with NaN (especially TEMP_DERATING from P-RATED)
+IF_data = Plant1_day[features + ['DATE_TIME', 'SOURCE_KEY', 'ANOMALY_FLAG']].dropna()
+
+#Scale features since Isolation Forest is sensitive to scale
+scaler = StandardScaler()
+IF_scaled = scaler.fit_transform(IF_data[features])
+
+print(IF_data.head())
+print(f'Rows used for Isolation Forest: {len(IF_data)}')
+print(f'Features: {features}')
