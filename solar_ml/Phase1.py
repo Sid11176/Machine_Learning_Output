@@ -116,7 +116,7 @@ plt.title('Module Temperature vs Efficiency Ratio — Plant 1')
 plt.xlabel('Module Temperature')
 plt.ylabel('Efficiency Ratio')
 plt.tight_layout()
-#plt.show()
+plt.show()
 
 
 
@@ -295,7 +295,7 @@ plt.xlabel('Inverter')
 plt.ylabel('Flag Rate (%)')
 plt.legend()
 plt.tight_layout()
-#plt.show()
+plt.show()
 
 
 
@@ -304,23 +304,195 @@ plt.tight_layout()
 #===============================================================================================
 #===============================================================================================
 #===============================================================================================
+
 
 #               MODEL 1
 from sklearn.ensemble import IsolationForest
 from sklearn.preprocessing import StandardScaler
 import numpy as np
 
-
-#Selecting Features
+# --- Selecting Features --------------------------------------------------------
 features = ['DC_POWER', 'EFFICIENCY_RATIO', 'TEMP_DERATING', 'IRRADIATION']
 
-#Dropping rows with NaN (especially TEMP_DERATING from P-RATED)
+# --- Dropping rows with NaN (especially TEMP_DERATING from P_RATED) ------------
 IF_data = Plant1_day[features + ['DATE_TIME', 'SOURCE_KEY', 'ANOMALY_FLAG']].dropna()
 
-#Scale features since Isolation Forest is sensitive to scale
+# --- Scale features since Isolation Forest is sensitive to scale ---------------
 scaler = StandardScaler()
 IF_scaled = scaler.fit_transform(IF_data[features])
 
-print(IF_data.head())
 print(f'Rows used for Isolation Forest: {len(IF_data)}')
 print(f'Features: {features}')
+
+# --- Tune contamination parameter ----------------------------------------------
+contamination_values = [0.01, 0.0157, 0.02, 0.05]
+
+for c in contamination_values:
+    clf = IsolationForest(contamination=c, random_state=42, n_estimators=100)
+    preds = clf.fit_predict(IF_scaled)
+    n_anomalies = (preds == -1).sum()
+    print(f'Contamination: {c:.4f} -> Anomalies Flagged: {n_anomalies} '
+          f'({n_anomalies/len(IF_data) * 100:.2f}%)')
+
+# --- Fit final model -----------------------------------------------------------
+clf = IsolationForest(contamination=0.0157, random_state=42, n_estimators=100)
+IF_data = IF_data.copy()
+IF_data['IF_ANOMALY'] = clf.fit_predict(IF_scaled)
+IF_data['IF_ANOMALY'] = (IF_data['IF_ANOMALY'] == -1).astype(int)
+
+print(f'\nTotal IF Anomalies:       {IF_data["IF_ANOMALY"].sum()}')
+print(f'Total Baseline Anomalies: {IF_data["ANOMALY_FLAG"].sum()}')
+
+# --- Compare IF vs Baseline (FIXED) -------------------------------------------
+IF_data['BOTH_FLAG'] = ((IF_data['IF_ANOMALY'] == 1) &
+                         (IF_data['ANOMALY_FLAG'] == 1)).astype(int)
+
+IF_data['IF_ONLY'] = ((IF_data['IF_ANOMALY'] == 1) &
+                       (IF_data['ANOMALY_FLAG'] == 0)).astype(int)
+
+# FIXED: separate assignment, correct logic
+IF_data['BASELINE_ONLY'] = ((IF_data['IF_ANOMALY'] == 0) &
+                              (IF_data['ANOMALY_FLAG'] == 1)).astype(int)
+
+print('\n=== Method Comparison ===')
+print(f'Both flagged (agreement):  {IF_data["BOTH_FLAG"].sum()}')
+print(f'IF only (baseline missed): {IF_data["IF_ONLY"].sum()}')
+print(f'Baseline only (IF missed): {IF_data["BASELINE_ONLY"].sum()}')
+
+# --- Cross-reference with Phase 2 flagged inverters ----------------------------
+flagged_inverters = ['sjndEbLyjtCKgGv', 'iCRJl6heRkivqQ3',
+                     'bvBOhCH3iADSZry', 'McdE0feGgRqW7Ca',
+                     'adLQvlD726eNBSB', 'wCURE6d3bPkepu2']
+
+print('\n=== IF Anomaly Rate per Flagged Inverter ===')
+for inverter in flagged_inverters:
+    subset = IF_data[IF_data['SOURCE_KEY'] == inverter]
+    rate = subset['IF_ANOMALY'].mean() * 100
+    baseline_rate = subset['ANOMALY_FLAG'].mean() * 100
+    print(f'{inverter}: IF={rate:.2f}%  Baseline={baseline_rate:.2f}%')
+
+# --- Diagnostic Test 1: Run IF without TEMP_DERATING --------------------------
+features_clean = ['DC_POWER', 'EFFICIENCY_RATIO', 'IRR_NORM_DC', 'IRRADIATION']
+IF_data_clean = Plant1_day[features_clean + ['DATE_TIME', 'SOURCE_KEY', 
+                                              'ANOMALY_FLAG']].dropna()
+scaler_clean = StandardScaler()
+IF_scaled_clean = scaler_clean.fit_transform(IF_data_clean[features_clean])
+
+clf_clean = IsolationForest(contamination=0.0157, random_state=42, n_estimators=100)
+IF_data_clean['IF_ANOMALY_CLEAN'] = (clf_clean.fit_predict(IF_scaled_clean) == -1).astype(int)
+
+both_clean = ((IF_data_clean['IF_ANOMALY_CLEAN'] == 1) &
+              (IF_data_clean['ANOMALY_FLAG'] == 1)).sum()
+print(f'\n=== Diagnostic: IF without TEMP_DERATING ===')
+print(f'Agreement rate: {both_clean}/{IF_data_clean["IF_ANOMALY_CLEAN"].sum()} '
+      f'= {both_clean/IF_data_clean["IF_ANOMALY_CLEAN"].sum()*100:.1f}%')
+
+# --- Diagnostic Test 2: Check irradiation during anomalies --------------------
+print('\n=== Diagnostic: Irradiation during anomalies vs normal ===')
+anomaly_irr = IF_data[IF_data['IF_ANOMALY'] == 1]['IRRADIATION'].describe()
+normal_irr  = IF_data[IF_data['IF_ANOMALY'] == 0]['IRRADIATION'].describe()
+print('Irradiation during anomalies:')
+print(anomaly_irr)
+print('\nIrradiation during normal readings:')
+print(normal_irr)
+
+
+
+
+
+
+
+
+# Add time context so IF knows peak hours are expected
+IF_data['HOUR'] = IF_data['DATE_TIME'].dt.hour
+IF_data['HOUR_SIN'] = np.sin(2 * np.pi * IF_data['HOUR'] / 24)
+IF_data['HOUR_COS'] = np.cos(2 * np.pi * IF_data['HOUR'] / 24)
+
+features_v2 = ['EFFICIENCY_RATIO', 'IRR_NORM_DC', 
+                'TEMP_DERATING', 'ROLLING_DEVIATION',
+                'HOUR_SIN', 'HOUR_COS']
+
+IF_data_v2 = Plant1_day.copy()
+IF_data_v2['HOUR'] = IF_data_v2['DATE_TIME'].dt.hour
+IF_data_v2['HOUR_SIN'] = np.sin(2 * np.pi * IF_data_v2['HOUR'] / 24)
+IF_data_v2['HOUR_COS'] = np.cos(2 * np.pi * IF_data_v2['HOUR'] / 24)
+IF_data_v2 = IF_data_v2[features_v2 + ['DATE_TIME', 'SOURCE_KEY', 
+                                        'ANOMALY_FLAG']].dropna()
+
+scaler_v2 = StandardScaler()
+IF_scaled_v2 = scaler_v2.fit_transform(IF_data_v2[features_v2])
+
+clf_v2 = IsolationForest(contamination=0.0157, random_state=42, n_estimators=100)
+IF_data_v2['IF_ANOMALY_V2'] = (clf_v2.fit_predict(IF_scaled_v2) == -1).astype(int)
+
+# Check irradiation distribution of new anomalies
+print('=== V2 Irradiation during anomalies ===')
+v2_anomaly_irr = IF_data_v2[IF_data_v2['IF_ANOMALY_V2'] == 1]['HOUR'].describe()
+print(v2_anomaly_irr)
+
+# Check new agreement rate
+both_v2 = ((IF_data_v2['IF_ANOMALY_V2'] == 1) & 
+            (IF_data_v2['ANOMALY_FLAG'] == 1)).sum()
+print(f'\nV2 Agreement rate: {both_v2}/{IF_data_v2["IF_ANOMALY_V2"].sum()} '
+      f'= {both_v2/IF_data_v2["IF_ANOMALY_V2"].sum()*100:.1f}%')
+
+# Check flagged inverters
+print('\n=== V2 IF Anomaly Rate per Flagged Inverter ===')
+for inverter in flagged_inverters:
+    subset = IF_data_v2[IF_data_v2['SOURCE_KEY'] == inverter]
+    rate = subset['IF_ANOMALY_V2'].mean() * 100
+    baseline_rate = subset['ANOMALY_FLAG'].mean() * 100
+    print(f'{inverter}: IF_V2={rate:.2f}%  Baseline={baseline_rate:.2f}%')
+
+
+
+
+
+
+
+
+
+
+
+# --- Plot 1: IF Anomaly Flag Rate per Inverter ---------------------------------
+if_inverter_flags = (IF_data.groupby('SOURCE_KEY')['IF_ANOMALY']
+                     .agg(['sum', 'count'])
+                     .rename(columns={'sum': 'FLAGS', 'count': 'TOTAL'}))
+if_inverter_flags['FLAG_RATE'] = (if_inverter_flags['FLAGS'] /
+                                   if_inverter_flags['TOTAL'] * 100).round(2)
+if_inverter_flags = if_inverter_flags.sort_values('FLAG_RATE', ascending=False)
+
+plt.figure(figsize=(12, 6))
+sns.barplot(data=if_inverter_flags.reset_index(),
+            x='SOURCE_KEY', y='FLAG_RATE')
+plt.xticks(rotation=90)
+plt.axhline(y=IF_data['IF_ANOMALY'].mean() * 100,
+            color='red', linestyle='--', linewidth=0.8, label='Fleet Average')
+plt.title('Isolation Forest Anomaly Flag Rate per Inverter')
+plt.xlabel('Inverter')
+plt.ylabel('Flag Rate (%)')
+plt.legend()
+plt.tight_layout()
+#plt.show()
+
+# --- Plot 2: Anomaly timestamps — 2 columns to fit display --------------------
+n = len(flagged_inverters)
+fig, axes = plt.subplots(3, 2, figsize=(16, 12))
+axes = axes.flatten()
+
+for ax, inverter in zip(axes, flagged_inverters):
+    subset = IF_data[IF_data['SOURCE_KEY'] == inverter]
+    ax.plot(subset['DATE_TIME'], subset['DC_POWER'],
+            color='steelblue', linewidth=0.5, alpha=0.7)
+    anomalies = subset[subset['IF_ANOMALY'] == 1]
+    ax.scatter(anomalies['DATE_TIME'], anomalies['DC_POWER'],
+               color='red', s=15, zorder=5, label='IF Anomaly')
+    ax.set_title(f'{inverter}', fontsize=9)
+    ax.set_ylabel('DC Power (kW)', fontsize=8)
+    ax.tick_params(axis='x', labelsize=7)
+    ax.legend(fontsize=7)
+
+plt.suptitle('Isolation Forest Anomalies on DC Power — Flagged Inverters',
+             fontsize=12)
+plt.tight_layout()
+plt.show()
