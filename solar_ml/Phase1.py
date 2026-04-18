@@ -397,63 +397,6 @@ print('\nIrradiation during normal readings:')
 print(normal_irr)
 
 
-
-
-
-
-
-
-# Add time context so IF knows peak hours are expected
-IF_data['HOUR'] = IF_data['DATE_TIME'].dt.hour
-IF_data['HOUR_SIN'] = np.sin(2 * np.pi * IF_data['HOUR'] / 24)
-IF_data['HOUR_COS'] = np.cos(2 * np.pi * IF_data['HOUR'] / 24)
-
-features_v2 = ['EFFICIENCY_RATIO', 'IRR_NORM_DC', 
-                'TEMP_DERATING', 'ROLLING_DEVIATION',
-                'HOUR_SIN', 'HOUR_COS']
-
-IF_data_v2 = Plant1_day.copy()
-IF_data_v2['HOUR'] = IF_data_v2['DATE_TIME'].dt.hour
-IF_data_v2['HOUR_SIN'] = np.sin(2 * np.pi * IF_data_v2['HOUR'] / 24)
-IF_data_v2['HOUR_COS'] = np.cos(2 * np.pi * IF_data_v2['HOUR'] / 24)
-IF_data_v2 = IF_data_v2[features_v2 + ['DATE_TIME', 'SOURCE_KEY', 
-                                        'ANOMALY_FLAG']].dropna()
-
-scaler_v2 = StandardScaler()
-IF_scaled_v2 = scaler_v2.fit_transform(IF_data_v2[features_v2])
-
-clf_v2 = IsolationForest(contamination=0.0157, random_state=42, n_estimators=100)
-IF_data_v2['IF_ANOMALY_V2'] = (clf_v2.fit_predict(IF_scaled_v2) == -1).astype(int)
-
-# Check irradiation distribution of new anomalies
-print('=== V2 Irradiation during anomalies ===')
-v2_anomaly_irr = IF_data_v2[IF_data_v2['IF_ANOMALY_V2'] == 1]['HOUR'].describe()
-print(v2_anomaly_irr)
-
-# Check new agreement rate
-both_v2 = ((IF_data_v2['IF_ANOMALY_V2'] == 1) & 
-            (IF_data_v2['ANOMALY_FLAG'] == 1)).sum()
-print(f'\nV2 Agreement rate: {both_v2}/{IF_data_v2["IF_ANOMALY_V2"].sum()} '
-      f'= {both_v2/IF_data_v2["IF_ANOMALY_V2"].sum()*100:.1f}%')
-
-# Check flagged inverters
-print('\n=== V2 IF Anomaly Rate per Flagged Inverter ===')
-for inverter in flagged_inverters:
-    subset = IF_data_v2[IF_data_v2['SOURCE_KEY'] == inverter]
-    rate = subset['IF_ANOMALY_V2'].mean() * 100
-    baseline_rate = subset['ANOMALY_FLAG'].mean() * 100
-    print(f'{inverter}: IF_V2={rate:.2f}%  Baseline={baseline_rate:.2f}%')
-
-
-
-
-
-
-
-
-
-
-
 # --- Plot 1: IF Anomaly Flag Rate per Inverter ---------------------------------
 if_inverter_flags = (IF_data.groupby('SOURCE_KEY')['IF_ANOMALY']
                      .agg(['sum', 'count'])
@@ -494,5 +437,245 @@ for ax, inverter in zip(axes, flagged_inverters):
 
 plt.suptitle('Isolation Forest Anomalies on DC Power — Flagged Inverters',
              fontsize=12)
+plt.tight_layout()
+plt.show()
+
+
+
+# ===============================================================================
+# MODEL 1 — VERSION 2 (Improved Features)
+# ===============================================================================
+
+# --- Add time context ----------------------------------------------------------
+IF_data_v2 = Plant1_day.copy()
+IF_data_v2['HOUR'] = IF_data_v2['DATE_TIME'].dt.hour
+IF_data_v2['HOUR_SIN'] = np.sin(2 * np.pi * IF_data_v2['HOUR'] / 24)
+IF_data_v2['HOUR_COS'] = np.cos(2 * np.pi * IF_data_v2['HOUR'] / 24)
+
+# --- Select improved features --------------------------------------------------
+# Removed: DC_POWER and IRRADIATION (highly correlated — causes peak-hour bias)
+# Added:   IRR_NORM_DC (normalizes DC by irradiation — cleaner signal)
+#          ROLLING_DEVIATION (inverter vs its own baseline)
+#          HOUR_SIN + HOUR_COS (temporal context — prevents peak-hour false flags)
+features_v2 = ['EFFICIENCY_RATIO', 'IRR_NORM_DC',
+                'TEMP_DERATING', 'ROLLING_DEVIATION',
+                'HOUR_SIN', 'HOUR_COS']
+
+IF_data_v2 = IF_data_v2[features_v2 + ['DATE_TIME', 'SOURCE_KEY',
+                                        'ANOMALY_FLAG']].dropna()
+
+print(f'Rows used for IF V2: {len(IF_data_v2)}')
+print(f'Features V2: {features_v2}')
+
+# --- Scale and fit -------------------------------------------------------------
+scaler_v2 = StandardScaler()
+IF_scaled_v2 = scaler_v2.fit_transform(IF_data_v2[features_v2])
+
+clf_v2 = IsolationForest(contamination=0.0157, random_state=42, n_estimators=100)
+IF_data_v2['IF_ANOMALY_V2'] = (clf_v2.fit_predict(IF_scaled_v2) == -1).astype(int)
+
+print(f'\nTotal IF V2 Anomalies: {IF_data_v2["IF_ANOMALY_V2"].sum()}')
+
+# --- Compare irradiation distribution: V1 vs V2 --------------------------------
+print('\n=== Irradiation during anomalies — V1 vs V2 ===')
+v1_mean = IF_data[IF_data['IF_ANOMALY'] == 1]['IRRADIATION'].mean()
+v2_mean = IF_data_v2.merge(
+    Plant1_day[['DATE_TIME', 'SOURCE_KEY', 'IRRADIATION']],
+    on=['DATE_TIME', 'SOURCE_KEY']
+)[lambda x: x['IF_ANOMALY_V2'] == 1]['IRRADIATION'].mean()
+
+print(f'V1 anomaly mean irradiation: {v1_mean:.4f}')
+print(f'V2 anomaly mean irradiation: {v2_mean:.4f}')
+print(f'Normal mean irradiation:     0.4297')
+print(f'V2 closer to normal? {"Yes" if abs(v2_mean - 0.4297) < abs(v1_mean - 0.4297) else "No"}')
+
+# --- Agreement rate V2 vs baseline --------------------------------------------
+both_v2 = ((IF_data_v2['IF_ANOMALY_V2'] == 1) &
+            (IF_data_v2['ANOMALY_FLAG'] == 1)).sum()
+print(f'\nV2 Agreement rate: {both_v2}/{IF_data_v2["IF_ANOMALY_V2"].sum()} '
+      f'= {both_v2/IF_data_v2["IF_ANOMALY_V2"].sum()*100:.1f}%')
+
+# --- Flagged inverter comparison V1 vs V2 ------------------------------------
+print('\n=== IF Anomaly Rate: V1 vs V2 vs Baseline ===')
+for inverter in flagged_inverters:
+    v1_sub = IF_data[IF_data['SOURCE_KEY'] == inverter]
+    v2_sub = IF_data_v2[IF_data_v2['SOURCE_KEY'] == inverter]
+    v1_rate = v1_sub['IF_ANOMALY'].mean() * 100
+    v2_rate = v2_sub['IF_ANOMALY_V2'].mean() * 100
+    base_rate = v1_sub['ANOMALY_FLAG'].mean() * 100
+    print(f'{inverter}: V1={v1_rate:.2f}%  V2={v2_rate:.2f}%  '
+          f'Baseline={base_rate:.2f}%')
+
+# --- Plot 1: V2 Flag Rate per Inverter ----------------------------------------
+v2_inverter_flags = (IF_data_v2.groupby('SOURCE_KEY')['IF_ANOMALY_V2']
+                     .agg(['sum', 'count'])
+                     .rename(columns={'sum': 'FLAGS', 'count': 'TOTAL'}))
+v2_inverter_flags['FLAG_RATE'] = (v2_inverter_flags['FLAGS'] /
+                                   v2_inverter_flags['TOTAL'] * 100).round(2)
+v2_inverter_flags = v2_inverter_flags.sort_values('FLAG_RATE', ascending=False)
+
+plt.figure(figsize=(12, 6))
+sns.barplot(data=v2_inverter_flags.reset_index(),
+            x='SOURCE_KEY', y='FLAG_RATE')
+plt.xticks(rotation=90)
+plt.axhline(y=IF_data_v2['IF_ANOMALY_V2'].mean() * 100,
+            color='red', linestyle='--', linewidth=0.8, label='Fleet Average')
+plt.title('Isolation Forest V2 Anomaly Flag Rate per Inverter')
+plt.xlabel('Inverter')
+plt.ylabel('Flag Rate (%)')
+plt.legend()
+plt.tight_layout()
+#plt.show()
+
+# --- Plot 2: V2 Anomalies on DC Power — Flagged Inverters ---------------------
+# Merge DC_POWER back for plotting since it was removed from features
+plot_data_v2 = IF_data_v2.merge(
+    Plant1_day[['DATE_TIME', 'SOURCE_KEY', 'DC_POWER']],
+    on=['DATE_TIME', 'SOURCE_KEY']
+)
+
+fig, axes = plt.subplots(3, 2, figsize=(16, 12))
+axes = axes.flatten()
+
+for ax, inverter in zip(axes, flagged_inverters):
+    subset = plot_data_v2[plot_data_v2['SOURCE_KEY'] == inverter]
+    ax.plot(subset['DATE_TIME'], subset['DC_POWER'],
+            color='steelblue', linewidth=0.5, alpha=0.7)
+    anomalies = subset[subset['IF_ANOMALY_V2'] == 1]
+    ax.scatter(anomalies['DATE_TIME'], anomalies['DC_POWER'],
+               color='red', s=15, zorder=5, label='IF V2 Anomaly')
+    ax.set_title(f'{inverter}', fontsize=9)
+    ax.set_ylabel('DC Power (kW)', fontsize=8)
+    ax.tick_params(axis='x', labelsize=7)
+    ax.legend(fontsize=7)
+
+plt.suptitle('Isolation Forest V2 Anomalies on DC Power — Flagged Inverters',
+             fontsize=12)
+plt.tight_layout()
+plt.show()
+
+
+
+# ===============================================================================
+# DEDICATED ANALYSIS — sjndEbLyjtCKgGv
+# ===============================================================================
+
+
+TARGET = 'sjndEbLyjtCKgGv'
+
+
+# --- Isolate the inverter ------------------------------------------------------
+target_df = Plant1_day[Plant1_day['SOURCE_KEY'] == TARGET].copy()
+target_dt = target_df.sort_values('DATE_TIME')
+print(f'Total readings for {TARGET}: {len(target_df)}')
+print(f'Date range: {target_df["DATE_TIME"].min()} to {target_df["DATE_TIME"].max()}')
+
+
+# --- Step 1: Daily aggregation -------------------------------------------------
+# Aggregate to daily level to remove intra-day noise
+daily_target = (target_df.groupby(target_df['DATE_TIME'].dt.date)
+                .agg(
+                    DAILY_DC = ('DC_POWER', 'mean'),
+                    DAILY_IRR = ('IRRADIATION', 'mean'),
+                    MEAN_EFF = ('EFFICIENCY_RATIO', 'mean'),
+                    MEAN_IRR_NORM = ('IRR_NORM_DC', 'mean'),
+                    MEAN_DERATING = ('TEMP_DERATING', 'mean')
+                )
+                .reset_index()
+                .rename(columns={'DATE_TIME': 'DATE'}))
+
+
+print('\n=== Daily Aggregation ===')
+print(daily_target.to_string())
+
+# --- Step 2: Compare against fleet daily average ------------------------------
+fleet_daily = (Plant1_day.groupby(Plant1_day['DATE_TIME'].dt.date)
+               .agg(
+                   FLEET_DC = ('DC_POWER', 'mean'),
+                   FLEET_IRR = ('IRR_NORM_DC', 'mean'),
+                   FLEET_EFF = ('EFFICIENCY_RATIO', 'mean')
+               )
+               .reset_index()
+               .rename(columns={'DATE_TIME': 'DATE'}))
+
+daily_compare = daily_target.merge(fleet_daily, on='DATE')
+
+# --- Step 3: Compute relative performance vs fleet ----------------------------
+daily_compare['REL_DC'] = ((daily_compare['DAILY_DC'] /
+                            daily_compare['FLEET_DC']) - 1) * 100
+
+daily_compare['REL_IRR_NORM'] = ((daily_compare['MEAN_IRR_NORM'] /
+                                  daily_compare['FLEET_IRR']) - 1) * 100
+
+daily_compare['REL_EFF'] = ((daily_compare['MEAN_EFF'] /
+                             daily_compare['FLEET_EFF']) - 1) * 100
+
+print('\n=== Relative Performance vs Fleet (%) ===')
+print(daily_compare[['DATE', 'REL_DC', 'REL_IRR_NORM', 'REL_EFF']].to_string())
+
+# --- Step 4: Trend analysis ---------------------------------------------------
+from scipy import stats
+
+x = np.arange(len(daily_compare))
+
+# Fit linear trend to IRR_NORM_DC relative performance
+slope, intercept, r_value, p_value, std_err = stats.linregress(
+    x, daily_compare['REL_IRR_NORM'])
+
+print(f'\n=== Trend Analysis: REL_IRR_NORM ===')
+print(f'Slope:     {slope:.4f}% per day')
+print(f'R-squared: {r_value**2:.4f}')
+print(f'P-value:   {p_value:.4f}')
+print(f'Trend:     {"Degrading" if slope < 0 else "Improving"}')
+
+# --- Step 5: Plots ------------------------------------------------------------
+
+# Plot 1: Daily IRR_NORM_DC — target vs fleet
+plt.figure(figsize=(12, 5))
+plt.plot(daily_compare['DATE'], daily_compare['MEAN_IRR_NORM'],
+         color='red', linewidth=1.5, label=TARGET)
+plt.plot(daily_compare['DATE'], daily_compare['FLEET_IRR'],
+         color='steelblue', linewidth=1.5, label='Fleet Average')
+plt.title(f'Daily IRR_NORM_DC — {TARGET} vs Fleet Average')
+plt.xlabel('Date')
+plt.ylabel('Mean IRR_NORM_DC')
+plt.legend()
+plt.tight_layout()
+#plt.show()
+
+# Plot 2: Relative performance vs fleet over time with trend line
+plt.figure(figsize=(12, 5))
+plt.plot(daily_compare['DATE'], daily_compare['REL_IRR_NORM'],
+         color='red', linewidth=1.2, label='Relative IRR_NORM_DC vs Fleet')
+trend_line = intercept + slope * x
+plt.plot(daily_compare['DATE'], trend_line,
+         color='black', linestyle='--', linewidth=1.0, label=f'Trend (slope={slope:.4f}%/day)')
+plt.axhline(y=0, color='gray', linestyle='--', linewidth=0.8, label='Fleet Baseline')
+plt.axhline(y=-5, color='orange', linestyle='--', linewidth=0.8, label='Warning (-5%)')
+plt.axhline(y=-10, color='darkred', linestyle='--', linewidth=0.8, label='Critical (-10%)')
+plt.title(f'Relative Performance vs Fleet — {TARGET}')
+plt.xlabel('Date')
+plt.ylabel('Deviation from Fleet Average (%)')
+plt.legend()
+plt.tight_layout()
+#plt.show()
+
+# Plot 3: Side by side — all three relative metrics
+fig, axes = plt.subplots(3, 1, figsize=(12, 10))
+metrics = ['REL_DC', 'REL_IRR_NORM', 'REL_EFF']
+titles  = ['Relative DC Power vs Fleet (%)',
+           'Relative IRR_NORM_DC vs Fleet (%)',
+           'Relative Efficiency vs Fleet (%)']
+colors  = ['steelblue', 'red', 'green']
+
+for ax, metric, title, color in zip(axes, metrics, titles, colors):
+    ax.plot(daily_compare['DATE'], daily_compare[metric],
+            color=color, linewidth=1.2)
+    ax.axhline(y=0, color='gray', linestyle='--', linewidth=0.8)
+    ax.set_title(title)
+    ax.set_ylabel('% vs Fleet')
+    ax.tick_params(axis='x', labelsize=8)
+
+plt.suptitle(f'Multi-metric Relative Performance — {TARGET}', fontsize=12)
 plt.tight_layout()
 plt.show()
